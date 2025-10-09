@@ -85,9 +85,13 @@ class RRBC_Net(nn.Module):
 # --- 실제 이미지를 불러와 모델을 실행하는 부분 ---
 if __name__ == '__main__':
     # 1. 모델 생성
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RRBC_Net(num_stages=3)
-    model.load_state_dict(torch.load('rrbc_model_trained.pth'))
-    model.eval()
+    # 훈련된 모델 가중치 엔진을 불러와 모델에 장착
+    model.load_state_dict(torch.load('rrbc_model_trained.pth', map_location=device))
+    model.to(device)
+    model.eval() # 모델을 추론 모드로 설정
+    print(f"Using device: {device}")
 
     # 2. 이미지 불러오기 및 전처리
     # OpenCV로 이미지 읽기 (결과는 NumPy 배열)
@@ -119,3 +123,4 @@ if __name__ == '__main__':
     print("아무 키나 누르면 창이 닫힙니다.")
     cv2.waitKey(0) # 사용자가 키를 누를 때까지 대기
     cv2.destroyAllWindows()
+
