@@ -84,14 +84,15 @@ class RRBC_Net(nn.Module):
 
 # --- 비디오 처리를 위한 실행 부분 ---
 if __name__ == '__main__':
+    # 0. GPU 사용 가능 여부 확인 및 모델 이동 (GPU 불가 시 CPU)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # 1. 모델 생성 및 추론 모드 설정
     model = RRBC_Net(num_stages=3)
-    model.load_state_dict(torch.load('rrbc_model_trained.pth'))
+    model.load_state_dict(torch.load('rrbc_model_trained.pth', map_location=device))
+
+    model.to(device)
     model.eval()
 
-    # GPU 사용 가능 여부 확인 및 모델 이동
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
     print(f"Using device: {device}")
 
     # 2. 비디오 파일 열기
@@ -140,5 +141,6 @@ if __name__ == '__main__':
     # 4. 자원 해제
     cap.release()
     cv2.destroyAllWindows()
+
 
 
