@@ -152,7 +152,7 @@ if __name__ == '__main__':
     train_dataset = RainDataset(root_dir='data/train', transform=transform)
     val_dataset = RainDataset(root_dir='data/validation', transform=transform)
     
-    # --- 2-4. 주방 보조(DataLoader) 고용! ---
+    # --- 2-4. DataLoader 고용 ---
     # BATCH_SIZE = 한 번에 모델에게 보여줄 이미지 개수. GPU 메모리에 따라 조절.
     BATCH_SIZE = 8 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -213,4 +213,5 @@ if __name__ == '__main__':
 # 훈련 완료 후 모델 가중치 저장
 torch.save(model.state_dict(), 'rrbc_model_trained.pth')
 print("Model training complete and saved.")
+
 
