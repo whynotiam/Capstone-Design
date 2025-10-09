@@ -205,9 +205,12 @@ if __name__ == '__main__':
                 total_val_loss += val_loss.item()
             
             avg_val_loss = total_val_loss / len(val_loader)
+            print(f"Validation Loss: {avg_val_loss:.4f}")
+            
             print("Validation finished for this epoch.")
             print("-" * 30)
 
 # 훈련 완료 후 모델 가중치 저장
 torch.save(model.state_dict(), 'rrbc_model_trained.pth')
 print("Model training complete and saved.")
+
