@@ -89,7 +89,6 @@ if __name__ == '__main__':
     # 1. 모델 생성 및 추론 모드 설정
     model = RRBC_Net(num_stages=3)
     model.load_state_dict(torch.load('rrbc_model_trained.pth', map_location=device))
-
     model.to(device)
     model.eval()
 
@@ -141,6 +140,7 @@ if __name__ == '__main__':
     # 4. 자원 해제
     cap.release()
     cv2.destroyAllWindows()
+
 
 
 
