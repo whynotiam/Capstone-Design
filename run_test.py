@@ -1,4 +1,3 @@
-# 필요한 PyTorch 라이브러리들을 가져옵니다.
 import torch
 import torch.nn as nn
 import cv2
@@ -141,4 +140,5 @@ if __name__ == '__main__':
     # 4. 자원 해제
     cap.release()
     cv2.destroyAllWindows()
+
 
