@@ -108,7 +108,6 @@ if __name__ == '__main__':
 
 
     # 3. 모델에 이미지 입력하여 추론 실행
-    print("훈련되지 않은 모델에 이미지를 입력합니다...")
     with torch.no_grad(): 
         output_tensor = model(input_tensor)
     print("추론 완료.")
@@ -124,5 +123,6 @@ if __name__ == '__main__':
     print("아무 키나 누르면 창이 닫힙니다.")
     cv2.waitKey(0) # 사용자가 키를 누를 때까지 대기
     cv2.destroyAllWindows()
+
 
 
