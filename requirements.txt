@@ -7,7 +7,9 @@
 # bash -> pip install -r requirements.txt
 
 # pytouch는 공식 홈페이지에서 GPU 버전으로 설치
+# https://pytorch.org/
 # torch==2.8.0
 
 opencv-python
+
 numpy
