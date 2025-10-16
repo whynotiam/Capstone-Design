@@ -8,13 +8,33 @@ import torch.optim as optim # 옵티마이저
 import torch.nn.functional as F # 손실 함수 등
 
 # --- 1. RRBC 모델 ---
-# --- 1-1. RRBC의 핵심 CNN 블록 정의 ---
+# --- 1-1. Squeeze-and-Excitation (SE) 블록 정의 ---
+class SEBlock(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid() 
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+# --- 1-2. SE 블록이 포함된 Recurrent Residual Block ---
 class RecurrentResidualBlock(nn.Module):
     def __init__(self, channels):
         super(RecurrentResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=2, dilation=2)
         self.relu = nn.ReLU()
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=2, dilation=2)
+        
+        self.se = SEBlock(channels)
 
     def forward(self, x):
         residual = x
@@ -22,64 +42,58 @@ class RecurrentResidualBlock(nn.Module):
         out = self.relu(self.conv1(x))
         out = self.conv2(out)
         
+        out = self.se(out)
+        
         out += residual
-        return out
+        return self.relu(out) 
 
-# --- 1-2. ConvLSTM 셀 정의 ---
+# --- 1-3. ConvLSTM 셀 정의 ---
 class ConvLSTMCell(nn.Module):
     def __init__(self, input_dim, hidden_dim, kernel_size):
         super(ConvLSTMCell, self).__init__()
         self.hidden_dim = hidden_dim
         padding = kernel_size // 2
-
         self.conv = nn.Conv2d(input_dim + hidden_dim, 4 * hidden_dim, kernel_size, padding=padding)
 
     def forward(self, x, prev_hidden_state):
         if prev_hidden_state is None:
-            h_prev, c_prev = torch.zeros_like(x), torch.zeros_like(x)
+            h_prev = torch.zeros(x.size(0), self.hidden_dim, x.size(2), x.size(3), device=x.device)
+            c_prev = torch.zeros(x.size(0), self.hidden_dim, x.size(2), x.size(3), device=x.device)
         else:
             h_prev, c_prev = prev_hidden_state
 
         combined = torch.cat([x, h_prev], dim=1)
-        
         gates = self.conv(combined)
         i, f, o, g = torch.split(gates, self.hidden_dim, dim=1)
-
         c_cur = torch.sigmoid(f) * c_prev + torch.sigmoid(i) * torch.tanh(g)
         h_cur = torch.sigmoid(o) * torch.tanh(c_cur)
-
         return h_cur, c_cur
 
-# --- 1-3. 최종 RRBC 전체 모델 조립 ---
+# --- 1-4. 최종 RRBC 전체 모델 조립 ---
 class RRBC_Net(nn.Module):
     def __init__(self, in_channels=3, feature_channels=64, num_stages=3):
         super(RRBC_Net, self).__init__()
         self.num_stages = num_stages
-
         self.conv_in = nn.Conv2d(in_channels, feature_channels, kernel_size=3, padding=1)
-
         self.rrb = RecurrentResidualBlock(channels=feature_channels)
         self.lstm = ConvLSTMCell(input_dim=feature_channels, hidden_dim=feature_channels, kernel_size=3)
-
         self.conv_out = nn.Conv2d(feature_channels, in_channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         original_image = x
-
-        x = self.conv_in(x)
-
+        
+        features = self.relu(self.conv_in(x))
         hidden_state = None
 
         for _ in range(self.num_stages):
-            x = self.rrb(x)
-            h, c = self.lstm(x, hidden_state)
+            features = self.rrb(features)
+            h, c = self.lstm(features, hidden_state)
             hidden_state = (h, c)
-            x = h
+            features = h
         
-        rain_layer = self.conv_out(x)
-        
+        rain_layer = self.conv_out(features)
         derained_image = original_image - rain_layer
-
         return derained_image
 
 
@@ -110,17 +124,26 @@ class RainDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx):
-        # idx번째 이미지를 불러오는 방법 정의
-        img_name = self.image_files[idx]
+    
+		    # 1. rainy 이미지 파일 경로 설정
+        rainy_img_name = self.image_files[idx] # 예: '1_1.jpg' 또는 '2.jpg'
+        rainy_path = os.path.join(self.rainy_dir, rainy_img_name)
         
-        rainy_path = os.path.join(self.rainy_dir, img_name)
-        clean_path = os.path.join(self.clean_dir, img_name)
-        
+        # 2. rainy 이미지 이름에서 clean 이미지 이름 추론
+        # 파일 이름에서 확장자를 분리 (1_1', '.jpg')
+        base_name, extension = os.path.splitext(rainy_img_name)
+        # '_'를 기준으로 분리하여 clean 이미지의 기본 이름 확인. (['1', '1'] -> '1')
+        clean_base_name = base_name.split('_')[0]
+        # 최종 clean 이미지 이름을 조합. ('1' + '.jpg' -> '1.jpg')
+        clean_img_name = clean_base_name + extension
+        clean_path = os.path.join(self.clean_dir, clean_img_name)
+        # ----------------------------------------------
+                
         # PIL 라이브러리로 이미지 오픈
         rainy_image = Image.open(rainy_path).convert("RGB")
         clean_image = Image.open(clean_path).convert("RGB")
         
-        # 전처리(transform)가 정의 시
+        # 전처리(transform) 정의 시
         if self.transform:
             rainy_image = self.transform(rainy_image)
             clean_image = self.transform(clean_image)
@@ -145,6 +168,10 @@ if __name__ == '__main__':
     # --- 2-2. 이미지에 적용할 전처리 정의 ---
     # 이미지를 PyTorch 텐서로 변환. 픽셀 값을 0~1로 정규화
     transform = transforms.Compose([
+        # 데이터 증강 기법
+        transforms.RandomHorizontalFlip(), # 50% 확률로 좌우 반전
+        transforms.ColorJitter(brightness=0.2, contrast=0.2), # 밝기, 대비 조절
+
         transforms.ToTensor() 
     ])
 
@@ -206,12 +233,10 @@ if __name__ == '__main__':
             
             avg_val_loss = total_val_loss / len(val_loader)
             print(f"Validation Loss: {avg_val_loss:.4f}")
-            
+
             print("Validation finished for this epoch.")
             print("-" * 30)
 
 # 훈련 완료 후 모델 가중치 저장
 torch.save(model.state_dict(), 'rrbc_model_trained.pth')
 print("Model training complete and saved.")
-
-
