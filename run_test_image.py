@@ -108,6 +108,7 @@ class RRBC_Net(nn.Module):
 
         # 처리된 특징을 다시 이미지(빗줄기)로 변환하는 마지막 레이어
         self.conv_out = nn.Conv2d(feature_channels, in_channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         # 0. 원본 비 오는 이미지 저장 (마지막에 더하기 위함)
@@ -173,16 +174,23 @@ if __name__ == '__main__':
         output_tensor = model(input_tensor)
     print("추론 완료.")
 
-    # 4. 출력 결과 후처리 및 시각화
+    # --- 4. 출력 결과 후처리 및 시각화 ---
     # PyTorch 텐서를 다시 시각화를 위한 NumPy 배열로 변환
     # (Batch, C, H, W) -> (C, H, W) -> (H, W, C), 0.0-1.0 -> 0-255
     output_np = output_tensor.squeeze(0).cpu().detach().numpy()
-    output_np_bgr = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
-    output_np_final = (output_np_bgr * 255.0).clip(0, 255).astype(np.uint8)
+
+    # (C, H, W) -> (H, W, C)로 차원 순서 변경
+    output_np_rgb = output_np.transpose((1, 2, 0))
+
+    # 픽셀 값 [0.0, 1.0] -> [0, 255]로 스케일링
+    output_np_rgb_255 = (output_np_rgb * 255.0).clip(0, 255).astype(np.uint8)
+
+    # PyTorch(RGB) -> OpenCV(BGR)로 색상 순서 변경
+    output_np_final = cv2.cvtColor(output_np_rgb_255, cv2.COLOR_RGB2BGR)
 
     # 원본 이미지와 결과 이미지를 화면에 표시
     cv2.imshow('Original Rainy Image', image_np_bgr)
-    cv2.imshow('Untrained Model Output', output_np_final)
+    cv2.imshow('Trained Model Output', output_np_final)
 
     print("아무 키나 누르면 창이 닫힙니다.")
     cv2.waitKey(0) # 사용자가 키를 누를 때까지 대기
