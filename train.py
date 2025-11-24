@@ -168,6 +168,8 @@ if __name__ == '__main__':
     # --- 2-2. 이미지에 적용할 전처리 정의 ---
     # 이미지를 PyTorch 텐서로 변환. 픽셀 값을 0~1로 정규화
     transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        
         # 데이터 증강 기법
         transforms.RandomHorizontalFlip(), # 50% 확률로 좌우 반전
         transforms.ColorJitter(brightness=0.2, contrast=0.2), # 밝기, 대비 조절
