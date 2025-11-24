@@ -108,6 +108,7 @@ class RRBC_Net(nn.Module):
 
         # 처리된 특징을 다시 이미지(빗줄기)로 변환하는 마지막 레이어
         self.conv_out = nn.Conv2d(feature_channels, in_channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         # 0. 원본 비 오는 이미지 저장 (마지막에 더하기 위함)
@@ -186,9 +187,11 @@ if __name__ == '__main__':
         output_np = output_tensor.squeeze(0).cpu().detach().numpy()
         output_np = (output_np.transpose((1, 2, 0)) * 255.0).clip(0, 255).astype(np.uint8)
 
+        output_np_bgr = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
+
         # --- 화면에 결과 표시 ---
         # 원본(리사이즈된) 영상과 결과 영상을 나란히 붙여서 보여주기
-        combined_output = np.hstack((frame_resized, output_np))
+        combined_output = np.hstack((frame_resized, output_np_bgr))
         cv2.imshow('Rain Removal (Original vs. RRBC Output)', combined_output)
 
         # 'q' 키를 누르면 종료
