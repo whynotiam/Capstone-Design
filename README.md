@@ -10,25 +10,25 @@ RRBC (CNN+LSTM) -> lane detection(HSV filter + sliding window + track + ransac)
 ### train
 ### test
 ### file instruction
-RRBC/
-├── data/
-│   ├── train/
-│   │   ├── rainy/ 
-│   │   │   ├── 001.png
-│   │   │   └── ...
-│   │   └── clean/
-│   │       ├── 001.png
-│   │       └── ...
-│   └── validation/
-│       ├── rainy/ 
-│       │   ├── 101.png
-│       │   └── ...
-│       └── clean/
-│           ├── 101.png
-│           └── ...
-├── run_test.py
-├── run_test_image.py
-├── train.py
+RRBC/                                        
+├── data/                                                                        
+│   ├── train/                                  
+│   │   ├── rainy/       #비오는 환경 이미지            
+│   │   │   ├── 001.png                                                      
+│   │   │   └── ...                                  
+│   │   └── clean/  #비가 오지 않는 환경 이미지                                    
+│   │       ├── 001.png                       
+│   │       └── ...                              
+│   └── validation/                              
+│       ├── rainy/                                
+│       │   ├── 101.png                            
+│       │   └── ...                               
+│       └── clean/                                 
+│           ├── 101.png                                 
+│           └── ...                                    
+├── run_test.py                                   
+├── run_test_image.py                                   
+├── train.py                                            
 └── .venv/
 
 ## lane detection
