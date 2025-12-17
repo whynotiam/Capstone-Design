@@ -8,7 +8,9 @@ RRBC기법을
 RRBC (CNN+LSTM) -> lane detection(HSV filter + sliding window + track + ransac)
 ## RRBC
 ### train
+
 ### test
+
 ### file instruction
 RRBC/                                        
 ├── data/                                                                        
@@ -40,6 +42,10 @@ RRBC/
 4. Sliding window + ransac 알고리즘을 통한 차선 추출                     
 5. 차선 인식 실패시 기존 차선을 이용한 추적                                   
 ### test
+1.새로운 영역을 지정            
+2.지정한 영역내에 존재하는 차선의 좌표를 필터링
+3.기존 코드에서 검출한 좌표들과 비교하여 우측 좌측 차선을 각각 차선 인식률 비교
+4.백분율로 좌측과 우측의 차선의 인식률을 각각 표현
 # Demo
 <img width="1436" height="813" alt="image" src="https://github.com/user-attachments/assets/229018e5-051c-43db-b458-df22b2a17dc0" />
 
