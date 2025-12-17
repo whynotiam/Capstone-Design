@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import cv2
+import numpy as np
+from sklearn.linear_model import RANSACRegressor
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from collections import deque
+from filterpy.kalman import KalmanFilter
+
+#전역 상태
+_prev_left_fit = None
+_prev_right_fit = None  
+_alpha_curve = 0.9  # 차선 곡선
+
+mask_buffer = deque(maxlen=5)  # 최근 5프레임 저장
+
+# Kalman Filter
+kf_left = KalmanFilter(dim_x=3, dim_z=3)
+kf_right = KalmanFilter(dim_x=3, dim_z=3)
+
+# 초기 상태 (a,b,c 계수)
+kf_left.x = np.array([0., 0., 0.])
+kf_right.x = np.array([0., 0., 0.])
+
+# Covariance
+kf_left.P *= 200
+kf_right.P *= 200
+
+# Transition model 
+kf_left.F = np.eye(3)
+kf_right.F = np.eye(3)
+
+# Measurement matrix
+kf_left.H = np.eye(3)
+kf_right.H = np.eye(3)
+
+# Process noise / Measurement noise
+kf_left.R = np.eye(3) * 0.01
+kf_right.R = np.eye(3) * 0.01
+kf_left.Q = np.eye(3) * 0.001
+kf_right.Q = np.eye(3) * 0.001
+
+# 프레임 누적 평균 적용
+def temporal_smoothing(new_mask):
+    mask_buffer.append(new_mask)
+    avg_mask = np.mean(np.array(mask_buffer), axis=0).astype(np.uint8)
+    _, smoothed_mask = cv2.threshold(avg_mask, 127, 255, cv2.THRESH_BINARY)
+    return smoothed_mask
+
+
+
+# ROI (BEV)
+def get_roi(frame):
+    h, w = frame.shape[:2]
+
+    src = np.float32([
+        [w*0.47, h*0.6],   # 좌상
+        [w*0.53, h*0.6],   # 우상
+        [w*0.73, h*0.95],  # 우하
+        [w*0.27, h*0.95]   # 좌하
+    ])
+    dst = np.float32([
+        [w*0.2, 0],
+        [w*0.8, 0],
+        [w*0.8, h],
+        [w*0.2, h]
+    ])
+    M = cv2.getPerspectiveTransform(src, dst)
+    Minv = cv2.getPerspectiveTransform(dst, src)
+    return M, Minv
+
+# 전역 상태 
+_prev_left_fit = None
+_prev_right_fit = None
+_alpha_curve = 0.9 
+prev_frame = None
+
+# 와이퍼 영역 마스크 적용
+def preprocess_frame_with_wiper_mask(frame, prev_frame):
+    edges = preprocess_frame(frame)
+
+    if prev_frame is None:
+        return edges, frame
+
+    diff = cv2.absdiff(prev_frame, frame)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, wiper_mask = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
+    
+    # 모폴로지 연산으로 잡음 줄이기
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
+    wiper_mask = cv2.morphologyEx(wiper_mask, cv2.MORPH_CLOSE, kernel)
+    wiper_mask = cv2.morphologyEx(wiper_mask, cv2.MORPH_OPEN, kernel)
+    
+    # 와이퍼 영역 제외
+    edges = cv2.bitwise_and(edges, cv2.bitwise_not(wiper_mask))
+
+    return edges, frame
+
+
+def preprocess_frame(frame):
+
+    ### 1. HSV 변환 (노란 차선용)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_yellow = np.array([10, 60, 60])
+    upper_yellow = np.array([32, 255, 255])
+    yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    ### 2. HLS 변환 (흰 차선용)
+    hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+    L = hls[:, :, 1]
+    S = hls[:, :, 2]
+
+    sobelx = cv2.Sobel(L, cv2.CV_64F, 1, 0, ksize=3)
+    sobelx = np.absolute(sobelx)
+    sobelx = np.uint8(255 * sobelx / np.max(sobelx) if np.max(sobelx) > 0 else sobelx)
+
+    white_mask = np.zeros_like(L)
+    white_mask[(L > 20) & (S < 50)] = 255  
+
+    sobel_mask = np.zeros_like(sobelx)
+    sobel_mask[(sobelx > 5) & (sobelx <= 255)] = 255
+
+    ### 3. 결합
+    combined = cv2.bitwise_or(yellow_mask, white_mask)
+    combined = cv2.bitwise_and(combined, sobel_mask)
+
+    ### 4. 모폴로지
+    kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+
+    # (1) 작은 노이즈 제거
+    combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel_small)
+
+    combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel_small)
+
+    return combined
+
+# RANSAC
+def fit_poly_with_ransac(x, y, ploty):
+    if len(x)==0 or len(y)==0:
+        return None
+    try:
+        model = make_pipeline(PolynomialFeatures(2), RANSACRegressor())
+        model.fit(y.reshape(-1,1), x)
+        return model.predict(ploty.reshape(-1,1))
+    except:
+        return None
+
+# 추적 기반 차선 검출
+def track_lanes(binary, nwindows=9, margin=50, minpix=30):
+    global _prev_left_fit, _prev_right_fit, _alpha_curve
+    h, w = binary.shape[:2]
+    ploty = np.linspace(0, h-1, h)
+
+    out_img = np.dstack([binary, binary, binary])
+
+    nonzero = binary.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+
+    left_fitx, right_fitx = None, None
+
+    # 이전 곡선이 있으면 추적
+    if _prev_left_fit is not None and _prev_right_fit is not None:
+        left_fit_vals = np.polyval(_prev_left_fit, nonzeroy)
+        right_fit_vals = np.polyval(_prev_right_fit, nonzeroy)
+
+        left_inds = (nonzerox > left_fit_vals-margin) & (nonzerox < left_fit_vals+margin)
+        right_inds = (nonzerox > right_fit_vals-margin) & (nonzerox < right_fit_vals+margin)
+
+        leftx, lefty = nonzerox[left_inds], nonzeroy[left_inds]
+        rightx, righty = nonzerox[right_inds], nonzeroy[right_inds]
+
+        left_fitx = fit_poly_with_ransac(leftx, lefty, ploty)
+        right_fitx = fit_poly_with_ransac(rightx, righty, ploty)
+
+    # fallback: 실패 → 슬라이딩 윈도우 초기화
+    if left_fitx is None or right_fitx is None:
+        histogram = np.sum(binary[h//2:,:], axis=0)
+        midpoint = histogram.shape[0]//2
+        leftx_base = np.argmax(histogram[:midpoint])
+        rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+
+        window_height = h//nwindows
+        leftx_current = leftx_base
+        rightx_current = rightx_base
+
+        left_lane_inds = []
+        right_lane_inds = []
+
+        for window in range(nwindows):
+            win_y_low = h - (window+1)*window_height
+            win_y_high = h - window*window_height
+            win_xleft_low = leftx_current - margin
+            win_xleft_high = leftx_current + margin
+            win_xright_low = rightx_current - margin
+            win_xright_high = rightx_current + margin
+
+            good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) &
+                              (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
+            good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) &
+                               (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
+
+            left_lane_inds.append(good_left_inds)
+            right_lane_inds.append(good_right_inds)
+
+            if len(good_left_inds) > minpix:
+                leftx_current = int(np.mean(nonzerox[good_left_inds]))
+            if len(good_right_inds) > minpix:
+                rightx_current = int(np.mean(nonzerox[good_right_inds]))
+
+        left_lane_inds = np.concatenate(left_lane_inds)
+        right_lane_inds = np.concatenate(right_lane_inds)
+
+        leftx, lefty = nonzerox[left_lane_inds], nonzeroy[left_lane_inds]
+        rightx, righty = nonzerox[right_lane_inds], nonzeroy[right_lane_inds]
+
+        left_fitx = fit_poly_with_ransac(leftx, lefty, ploty)
+        right_fitx = fit_poly_with_ransac(rightx, righty, ploty)
+
+    # 곡선
+    if left_fitx is not None:
+        new_fit = np.polyfit(ploty, left_fitx, 2)
+        kf_left.predict()
+        kf_left.update(new_fit)
+
+        _prev_left_fit = kf_left.x
+        left_fitx = np.polyval(_prev_left_fit, ploty)
+    else:
+        # 차선 검출 실패 → 예측 유지
+        if _prev_left_fit is not None:
+            kf_left.predict()
+            left_fitx = np.polyval(kf_left.x, ploty)
+
+    if right_fitx is not None:
+        new_fit = np.polyfit(ploty, right_fitx, 2)
+
+        kf_right.predict()
+        kf_right.update(new_fit)
+
+        _prev_right_fit = kf_right.x
+        right_fitx = np.polyval(_prev_right_fit, ploty)
+    else:
+        if _prev_right_fit is not None:
+            kf_right.predict()
+            right_fitx = np.polyval(kf_right.x, ploty)
+
+    # 그리기
+    #if left_fitx is not None:
+    #    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    #    cv2.polylines(out_img, np.int32([pts_left]), False, (255,0,0), 5)
+    #if right_fitx is not None:
+    #    pts_right = np.array([np.transpose(np.vstack([right_fitx, ploty]))])
+    #    cv2.polylines(out_img, np.int32([pts_right]), False, (0,0,255), 5)
+    
+
+    if left_fitx is not None and right_fitx is not None:
+        expected_lane_width = 350  # BEV에서 적정 차선 폭(px)
+        current_width = np.mean(right_fitx - left_fitx)
+
+        # 폭이 너무 튀면 보정 (허용 오차 ±40px)
+        if abs(current_width - expected_lane_width) > 40:
+            right_fitx = left_fitx + expected_lane_width
+    # 초록색 ROI 영역 지정 (BEV 좌표계)
+    roi_margin_x1 = int(w * 0.05) # 0.0.4
+    roi_margin_x2 = int(w * 0.97)  # 0.9
+    roi_margin_y1 = int(h * 0.7) # 0.7
+    roi_margin_y2 = h - 1
+
+    # ROI 영역 그리기 (빨간색)
+    cv2.rectangle(out_img, (roi_margin_x1, roi_margin_y1), (roi_margin_x2, roi_margin_y2), (0, 255, 0), 3)
+
+    # ROI 내부에서 인식된 좌표 필터링
+    if left_fitx is None:
+        left_in_roi = False
+    else:
+        left_in_roi = ((left_fitx >= roi_margin_x1) & (left_fitx <= roi_margin_x2))
+
+    if right_fitx is None:
+        right_in_roi = False
+    else:
+        right_in_roi = ((right_fitx >= roi_margin_x1) & (right_fitx <= roi_margin_x2))
+
+    # 좌우 차선 인식률 계산
+    left_accuracy = np.sum(left_in_roi) / len(left_fitx) if left_fitx is not None and len(left_fitx) > 0 else 0
+    right_accuracy = np.sum(right_in_roi) / len(right_fitx) if right_fitx is not None and len(right_fitx) > 0 else 0
+
+    # 좌우 차선 그리기
+    # ROI 내부에서 인식된 좌표 필터링 (None 체크 추가)
+
+    if left_fitx is not None and len(left_fitx) > 0:
+        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+        cv2.polylines(out_img, np.int32([pts_left]), False, (255, 0, 0), 5)
+        # ROI 내 점 필터링 및 인식률 계산
+        left_in_roi = (left_fitx >= roi_margin_x1) & (left_fitx <= roi_margin_x2)
+        left_accuracy = np.sum(left_in_roi) / len(left_fitx)
+    else:
+        left_accuracy = 0  # 필요시
+
+    if right_fitx is not None and len(right_fitx) > 0:
+        pts_right = np.array([np.transpose(np.vstack([right_fitx, ploty]))])
+        cv2.polylines(out_img, np.int32([pts_right]), False, (0, 0, 255), 5)
+        # ROI 내 점 필터링 및 인식률 계산
+        right_in_roi = (right_fitx >= roi_margin_x1) & (right_fitx <= roi_margin_x2)
+        right_accuracy = np.sum(right_in_roi) / len(right_fitx)
+    else:
+        right_accuracy = 0  # 필요시
+
+# =============================================================(추가 끝)
+    # 인식률을 전역 변수 대신 반환값으로 넘기도록 수정
+    return out_img, left_accuracy, right_accuracy   # left_accuracy, right_accuracy 추가
+
+
+# 메인
+if __name__ == "__main__":
+    cap = cv2.VideoCapture("one.mp4")
+    ret, frame = cap.read()
+    if not ret:
+        print("영상 로드 실패")
+        exit()
+    h, w = frame.shape[:2]
+
+    M, Minv = get_roi(frame)
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        edges, prev_frame = preprocess_frame_with_wiper_mask(frame, prev_frame)
+        smoothed_edges = temporal_smoothing(edges)
+    
+        bev = cv2.warpPerspective(smoothed_edges, M, (w,h))
+        # track_lanes 결과 받기
+        lane_bev_img, left_acc, right_acc = track_lanes(bev)
+
+    # BEV → 원본 시점으로 역투영
+        lane_org = cv2.warpPerspective(lane_bev_img, Minv, (w, h))
+        result = cv2.addWeighted(frame, 1.0, lane_org, 0.6, 0)
+        resized = cv2.resize(result, (int(w*0.5),int(h*0.5)))
+        # =========================================================== (추가)
+        # 인식률 화면 출력
+        cv2.putText(result, f"L: {left_acc * 100:.1f}%, R: {right_acc * 100:.1f}%",
+                    (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+        print(f"Left accuracy: {left_acc * 100:.2f}%, Right accuracy: {right_acc * 100:.2f}%")
+        # ===========================================================  
+        cv2.imshow("Lane Detection", resized)
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
+    cap.release()
+    cv2.destroyAllWindows() 
