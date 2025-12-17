@@ -12,18 +12,18 @@ RRBC (CNN+LSTM) -> lane detection(HSV filter + sliding window + track + ransac)
 ### file instruction
 RRBC/                                        
 ├── data/                                                                        
-│   ├── train/                                  
-│   │   ├── rainy/       #비오는 환경 이미지            
+│   ├── train/           #훈련용 데이터                       
+│   │   ├── rainy/       # 훈련용 비오는 이미지            
 │   │   │   ├── 001.png                                                      
 │   │   │   └── ...                                  
-│   │   └── clean/  #비가 오지 않는 환경 이미지                                    
+│   │   └── clean/  # 훈련용 비가 오지 않는 환경 이미지                                    
 │   │       ├── 001.png                       
 │   │       └── ...                              
-│   └── validation/                              
+│   └── validation/   # 검증용 데이터                           
 │       ├── rainy/                                
-│       │   ├── 101.png                            
+│       │   ├── 101.png     # 검증용 비오는 이미지                        
 │       │   └── ...                               
-│       └── clean/                                 
+│       └── clean/     # 검증용 비가 오지 않는 환경 이미지                     
 │           ├── 101.png                                 
 │           └── ...                                    
 ├── run_test.py                                   
@@ -31,6 +31,8 @@ RRBC/
 ├── train.py                                            
 └── .venv/
 
+이미지 쌍 이름 반드시 동일
+훈련용 이미지 8 : 검증용 이미지 2 정도의 비율 (조절 가능) 과적합 방지
 ## lane detection
 ### test
 # Demo
