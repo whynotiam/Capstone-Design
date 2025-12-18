@@ -8,8 +8,15 @@ RRBC기법을
 RRBC (CNN+LSTM) -> lane detection(HSV filter + sliding window + track + ransac)
 ## RRBC
 ### train
-
+1. 데이터 매핑 및 로드: 파일명 파싱을 통해 Clean(1) : Rainy(N) 비율의 비대칭 데이터셋 동적 매칭
+2. 네트워크 연산: SE Block(중요 특징 강조) + ConvLSTM(반복 정제)을 통한 재귀적 잔차 학습 수행
+3. 손실 계산 및 최적화: 예측 이미지와 GT(Ground Truth) 간의 L1 Loss 산출 및 역전파(Backpropagation)
+4. 학습 모니터링: Training/Validation Loss 추적을 통해 과적합 방지 및 최적 가중치(.pth) 저장
 ### test
+1. 전처리 및 색상 보정: OpenCV(BGR)와 PyTorch(RGB) 간 색상 채널 불일치 해결 및 입력 크기(Resize) 조정
+2. 영상 복원 추론: 학습된 모델을 통해 빗줄기(Rain Layer)를 추정하고 원본에서 제거
+3. 정량적 성능 평가: Clean 이미지와 비교하여 화질(PSNR) 및 구조적 유사도(SSIM) 점수 산출
+4. 시각적 비교 검증: 빗줄기 제거 전/후 영상을 병합 출력하여 육안으로 제거 성능 확인
 
 ### file instruction
 RRBC/                                        
@@ -30,8 +37,7 @@ RRBC/
 │           └── ...                                    
 ├── run_test.py                                   
 ├── run_test_image.py                                   
-├── train.py                                            
-└── .venv/
+└── train.py  
 
 이미지 쌍 이름 반드시 동일
 훈련용 이미지 8 : 검증용 이미지 2 정도의 비율 (조절 가능) 과적합 방지
